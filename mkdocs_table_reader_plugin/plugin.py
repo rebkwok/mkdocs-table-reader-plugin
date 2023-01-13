@@ -131,6 +131,7 @@ class TableReaderPlugin(BasePlugin):
 
     config_scheme = (
         ("data_path", config_options.Type(str, default=".")),
+        ("data_paths", config_options.Type(list, default=[])),
         ("base_path", config_options.Choice(['docs_dir','config_dir'], default="config_dir")),
     )
 
@@ -178,58 +179,75 @@ class TableReaderPlugin(BasePlugin):
             mkdocs_dir = os.path.dirname(os.path.abspath(config["config_file_path"]))
         if self.config.get("base_path") == "docs_dir":
             mkdocs_dir = os.path.abspath(config["docs_dir"])
-        
-        for reader, function in READERS.items():
-            
-            # Regex pattern for tags like {{ read_csv(..) }}
-            # match group 0: to extract any leading whitespace 
-            # match group 1: to extract the arguments (positional and keywords)
-            tag_pattern = re.compile(
-                "( *)\{\{\s+%s\((.+)\)\s+\}\}" % reader, flags=re.IGNORECASE
-            )
 
-            matches = re.findall(tag_pattern, markdown)
-            
-            
-            for result in matches:
+        # Build a list of all possible data_paths (relative to mkdocs_dir) to look for files
+        # if no data_path or data_paths is specified, only the base mkdocs_dir (".") is used
+        # if only data_paths is specified, the base mkdocs_dir will always be the first path 
+        # checked
+        data_paths = [self.config.get("data_path")]
+        for path in self.config.get("data_paths"):
+            if path not in data_paths:
+                data_paths.append(path)
 
-                # Safely parse the arguments
-                pd_args, pd_kwargs = parse_argkwarg(result[1])
-
-                # Make sure the path is relative to "data_path"
-                if len(pd_args) > 0:
-                    pd_args[0] = os.path.join(self.config.get("data_path"), pd_args[0])
-                    file_path = pd_args[0]
-
-                if pd_kwargs.get("filepath_or_buffer"):
-                    file_path = pd_kwargs["filepath_or_buffer"]
-                    file_path = os.path.join(self.config.get("data_path"), file_path)
-                    pd_kwargs["filepath_or_buffer"] = file_path
-
-                # Load the table
-                with cd(mkdocs_dir):
-                    if not os.path.exists(file_path):
-                        raise FileNotFoundError(
-                            "[table-reader-plugin]: File does not exist: %s" % file_path
-                        )
-
-                    markdown_table = function(*pd_args, **pd_kwargs)
-
-                # Deal with indentation
-                # f.e. relevant when used inside content tabs
-                leading_spaces = result[0]
-                # make sure it's in multiples of 4 spaces
-                leading_spaces = int(len(leading_spaces) / 4) * "    "
-                # indent entire table
-                fixed_lines = []
-                for line in markdown_table.split('\n'):
-                    fixed_lines.append(textwrap.indent(line, leading_spaces))
+        def _build_markdown(data_path, markdown_):
+            for reader, function in READERS.items():
                 
-                markdown_table = "\n".join(fixed_lines)
+                # Regex pattern for tags like {{ read_csv(..) }}
+                # match group 0: to extract any leading whitespace 
+                # match group 1: to extract the arguments (positional and keywords)
+                tag_pattern = re.compile(
+                    "( *)\{\{\s+%s\((.+)\)\s+\}\}" % reader, flags=re.IGNORECASE
+                )
 
-                # Insert markdown table
-                # By replacing first occurance of the regex pattern
-                markdown = tag_pattern.sub(markdown_table, markdown, count=1)
+                matches = re.findall(tag_pattern, markdown_)
+                
+                for result in matches:
 
+                    # Safely parse the arguments
+                    pd_args, pd_kwargs = parse_argkwarg(result[1])
 
-        return markdown
+                    # Make sure the path is relative to "data_path"
+                    if len(pd_args) > 0:
+                        pd_args[0] = os.path.join(data_path, pd_args[0])
+                        file_path = pd_args[0]
+
+                    if pd_kwargs.get("filepath_or_buffer"):
+                        file_path = pd_kwargs["filepath_or_buffer"]
+                        file_path = os.path.join(data_path, file_path)
+                        pd_kwargs["filepath_or_buffer"] = file_path
+
+                    # Load the table
+                    with cd(mkdocs_dir):
+                        if not os.path.exists(file_path):
+                            raise FileNotFoundError(file_path)
+
+                        markdown_table = function(*pd_args, **pd_kwargs)
+
+                    # Deal with indentation
+                    # f.e. relevant when used inside content tabs
+                    leading_spaces = result[0]
+                    # make sure it's in multiples of 4 spaces
+                    leading_spaces = int(len(leading_spaces) / 4) * "    "
+                    # indent entire table
+                    fixed_lines = []
+                    for line in markdown_table.split('\n'):
+                        fixed_lines.append(textwrap.indent(line, leading_spaces))
+                    
+                    markdown_table = "\n".join(fixed_lines)
+
+                    # Insert markdown table
+                    # By replacing first occurance of the regex pattern
+                    markdown_ = tag_pattern.sub(markdown_table, markdown_, count=1)
+            return markdown_
+
+        not_found_errors = []
+        for data_path in data_paths:
+            try:
+                return _build_markdown(data_path, markdown)
+            except FileNotFoundError as e:
+                not_found_errors.append(str(e))
+            
+        if not_found_errors:
+            raise FileNotFoundError(
+                "[table-reader-plugin]: File does not exist\n, paths tried:\n %s" % '\n'.join(not_found_errors)
+            )

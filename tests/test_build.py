@@ -289,13 +289,43 @@ def test_using_docs_dir(tmp_path):
     contents = page_with_tag.read_text()
     assert re.search(r"531456", contents)
 
+
 def test_wrong_path(tmp_path):
 
     tmp_proj = setup_clean_mkdocs_folder(
         "tests/fixtures/wrongpath/mkdocs.yml", tmp_path
     )
-
     result = build_docs_setup(tmp_proj)
     assert result.exit_code == 1, "'mkdocs build' command failed"
-    assert "[table-reader-plugin]: File does not exist" in result.output
-    assert "non_existing_table.csv" in result.output
+    assert "[table-reader-plugin]: File does not exist" in str(result.exception)
+    assert "non_existing_table.csv" in str(result.exception)
+
+
+def test_multiple_data_paths(tmp_path):
+
+    tmp_proj = setup_clean_mkdocs_folder(
+        "tests/fixtures/multiplepaths/mkdocs.yml", tmp_path
+    )
+    print(tmp_proj)
+    result = build_docs_setup(tmp_proj)
+    assert result.exit_code == 0, "'mkdocs build' command failed"
+
+    page_with_table1 = tmp_proj / "site/table1/index.html"
+    contents = page_with_table1.read_text()
+    # Make sure table1.csv is inserted from the base path
+    assert re.search(r"111111", contents)
+    
+    page_with_table2= tmp_proj / "site/table2/index.html"
+    contents = page_with_table2.read_text()
+    # Make sure table2.csv is inserted from the path "docs"
+    assert re.search(r"222222", contents)
+
+    page_with_table3 = tmp_proj / "site/table3/index.html"
+    contents = page_with_table3.read_text()
+    # Make sure the table3.csv is inserted from path "tables"
+    assert re.search(r"333333", contents)
+
+    page_with_no_tables = tmp_proj / "site/no_tables/index.html"
+    contents = page_with_no_tables.read_text()
+    # A page with no tables is rendered correctly
+    assert re.search(r"This is a page with no tables", contents)
